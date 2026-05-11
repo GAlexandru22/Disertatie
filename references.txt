@@ -1,0 +1,119 @@
+DISSERTATION REFERENCES — PPE Detection System
+===============================================
+
+== ACADEMIC PAPERS: Helmet / Hardhat Detection ==
+
+1. Enhanced YOLOv8n-Based Three-Module Lightweight Helmet Detection System
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC12736895/
+
+2. YOLOv8 Algorithm for Safety Helmet Detection in Complex Environments
+   https://www.nature.com/articles/s41598-025-08828-z
+
+3. Helmet Wearing State Detection Based on Improved YOLOv5s
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC9786055/
+
+4. Lightweight Helmet Detection Algorithm Using an Improved YOLOv4
+   https://pmc.ncbi.nlm.nih.gov/articles/PMC9919412/
+
+5. Helmet Wearing Detection Algorithm Based on Improved YOLOv5
+   https://www.nature.com/articles/s41598-024-58800-6
+
+6. Research on Helmet Wearing Detection Method Based on Deep Learning
+   https://www.nature.com/articles/s41598-024-57433-z
+
+7. EGS-YOLO: A Fast and Reliable Safety Helmet Detection Method Modified Based on YOLOv7
+   https://www.mdpi.com/2076-3417/14/17/7923
+
+8. YOLO-PL: Helmet Wearing Detection Algorithm Based on Improved YOLOv4
+   https://www.sciencedirect.com/science/article/abs/pii/S1051200423003780
+
+9. Comprehensive Study on Automatic Helmet Violator Detection System
+   https://www.sciencedirect.com/science/article/pii/S0045790624002179
+
+10. Verification and Performance Comparison of CNN-Based Algorithms for Two-Step Helmet Detection
+    https://www.sciencedirect.com/science/article/abs/pii/S0957417423005985
+
+11. YOLO-LHD: Enhanced Lightweight Approach for Helmet Wearing Detection
+    https://www.frontiersin.org/journals/built-environment/articles/10.3389/fbuil.2023.1288445/full
+
+12. VisionGuard: Synergistic Framework for Helmet Violation Detection
+    https://arxiv.org/html/2506.21005
+
+
+== ACADEMIC PAPERS: General PPE Detection ==
+
+13. CIB-SE-YOLOv8: Optimized YOLOv8 for Real-Time Safety Equipment Detection
+    https://ieeexplore.ieee.org/document/10957807/
+
+14. Personal Protective Equipment Detection Using YOLOv8 Architecture on Benchmark Datasets
+    https://www.tandfonline.com/doi/full/10.1080/23311916.2024.2333209
+
+15. Enhancing Worker Safety: Real-Time Detection of PPE to Prevent Falls
+    https://ascelibrary.org/doi/abs/10.1061/JCEMD4.COENG-14985
+
+16. Personal Protective Equipment Detection: A Deep-Learning-Based Sustainable Approach
+    https://www.mdpi.com/2071-1050/15/18/13990
+
+17. A Deep Learning-Based Algorithm for the Detection of Personal Protective Equipment
+    https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0322115
+
+18. Deep Learning-Based Framework for Monitoring PPE on Construction Sites
+    https://academic.oup.com/jcde/article/10/2/905/7069329
+
+19. Fast Personal Protective Equipment Detection for Real Construction Sites Using Deep Learning
+    https://www.mdpi.com/1424-8220/21/10/3478
+
+20. Detection of Personal Protective Equipment Compliance on Construction Sites
+    https://www.frontiersin.org/journals/built-environment/articles/10.3389/fbuil.2020.00136/full
+
+21. A Systematic Review of Computer Vision-Based PPE Compliance in Industry Practice
+    https://link.springer.com/article/10.1007/s10462-024-10978-x
+
+22. Automated Non-PPE Detection Using YOLOv10 and Transformers
+    https://www.nature.com/articles/s41598-025-12468-8
+
+23. Comprehensive Performance Evaluation of YOLOv11, YOLOv10, YOLOv9, YOLOv8 and YOLOv5
+    https://ieeexplore.ieee.org/document/11090973/
+
+24. Dataset of Personal Protective Equipment
+    https://pmc.ncbi.nlm.nih.gov/articles/PMC12398887/
+
+
+== ACADEMIC PAPERS: Datasets ==
+
+25. SH17: A Dataset for Human Safety and PPE Detection in Manufacturing Industry
+    https://arxiv.org/html/2407.04590v1
+
+
+== OFFICIAL DOCUMENTATION ==
+
+26. Ultralytics YOLO11 Official Documentation
+    https://docs.ultralytics.com/models/yolo11
+
+27. Construction-PPE Dataset — Ultralytics YOLO Docs
+    https://docs.ultralytics.com/datasets/detect/construction-ppe/
+
+
+== GITHUB REPOSITORIES ==
+
+28. Construction Site Safety PPE Detection (snehilsanyal)
+    https://github.com/snehilsanyal/Construction-Site-Safety-PPE-Detection
+
+29. Construction Site Safety PPE Detection (VoxDroid)
+    https://github.com/VoxDroid/Construction-Site-Safety-PPE-Detection
+
+30. Construction PPE Detection — FastAPI backend (Ansarimajid)
+    https://github.com/Ansarimajid/Construction-PPE-Detection
+
+31. SH17 Dataset Repository
+    https://github.com/ahmadmughees/SH17dataset
+
+
+== DATASET USED IN THIS PROJECT ==
+
+32. Construction Site Safety v28 — Roboflow Universe (CC BY 4.0)
+    https://universe.roboflow.com/roboflow-universe-projects/construction-site-safety
+
+
+NOTE: Verify all links before submitting. IEEE, Nature, MDPI, and PubMed (PMC)
+entries are peer-reviewed and carry the most academic weight.
