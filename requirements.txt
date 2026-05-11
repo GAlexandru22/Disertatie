@@ -1,0 +1,11 @@
+# Install PyTorch with CUDA support FIRST (before this file):
+#   CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   CUDA 11.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#   CPU only:  pip install torch torchvision
+#
+# Then install the rest:
+#   pip install -r requirements.txt
+
+ultralytics>=8.3.0
+opencv-python>=4.9.0
+numpy>=1.26.0

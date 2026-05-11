@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Ultralytics training outputs (large — copy best.pt manually)
+runs/
+
+# ONNX exports
+*.onnx
+
+# Output videos
+output.mp4
+*.mp4
+!Date_pentru_testare/*.mp4
+
+# macOS
+.DS_Store
+
+# VSCode / JetBrains
+.vscode/
+.idea/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
