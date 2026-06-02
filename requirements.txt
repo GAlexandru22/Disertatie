@@ -9,3 +9,10 @@
 ultralytics>=8.3.0
 opencv-python>=4.9.0
 numpy>=1.26.0
+
+# --- Context-aware VLM mode (required only when using --context) ---
+# VLM queries go through Ollama (local model server) — no bitsandbytes needed.
+# Setup: install Ollama from https://ollama.com/download, then run:
+#   ollama pull llava:7b
+requests>=2.31.0
+Pillow>=10.0.0

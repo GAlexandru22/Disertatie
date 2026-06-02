@@ -9,6 +9,10 @@ Architecture:
   3. Apply spatial position validation (helmet near head zone, vest near torso)
      as a secondary sanity filter.
   4. Derive compliance flags per person and per frame.
+  5. (Optional) If hazard detections from YOLO-World are provided, populate
+     each PersonRecord.nearby_hazards with the names of machines whose danger
+     zone overlaps the person's center point.  This data is consumed by
+     context_rules.build_ppe_summary() and the visualizer's proximity overlay.
 """
 
 from __future__ import annotations
@@ -50,6 +54,10 @@ class PersonRecord:
     mask_position_valid: bool = False
     vest_position_valid: bool = False
     fully_compliant: bool = False
+    # Names of YOLO-World-detected machines whose danger zone overlaps this person.
+    # Populated by ComplianceChecker.analyze() when hazard_detections are provided.
+    # Used by context_rules.build_ppe_summary() and the visualizer proximity overlay.
+    nearby_hazards: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -79,10 +87,26 @@ class ComplianceChecker:
 
     def analyze(
         self,
-        boxes,                          # ultralytics Boxes tensor
+        boxes,                                    # ultralytics Boxes tensor
         class_names: dict[int, str],
-        frame_shape: tuple[int, int],   # (H, W)
+        frame_shape: tuple[int, int],             # (H, W)
+        hazard_detections: Optional[list] = None, # list[HazardDetection] from context_detector
     ) -> ComplianceReport:
+        """Run PPE compliance analysis on a single frame.
+
+        Args:
+            boxes:             Ultralytics Boxes object from model.predict().
+            class_names:       Dict mapping class_id → class name (model.names).
+            frame_shape:       (height, width) of the frame in pixels.
+            hazard_detections: Optional list of HazardDetection objects from
+                               ContextDetector.detect().  When provided, each
+                               PersonRecord.nearby_hazards is populated with the
+                               names of machines whose danger zone contains the
+                               person's center.  Pass None to skip (no-context mode).
+
+        Returns:
+            ComplianceReport with per-person compliance flags and summary counts.
+        """
         detections = self._parse(boxes, class_names)
         persons_det = [d for d in detections if d.class_id == self.PERSON_CLASS]
         ppe_items = [
@@ -98,6 +122,12 @@ class ComplianceChecker:
         for rec in records:
             self._compute_compliance(rec)
 
+        # Hazard proximity annotation — only runs when context mode is active.
+        # We keep this logic here so the rest of the pipeline only needs to
+        # read PersonRecord.nearby_hazards without knowing where it came from.
+        if hazard_detections:
+            self._populate_nearby_hazards(records, hazard_detections)
+
         compliant = sum(1 for r in records if r.fully_compliant)
         violations = len(records) - compliant
 
@@ -112,6 +142,50 @@ class ComplianceChecker:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    # The proximity zone multiplier must match context_rules.PROXIMITY_MULTIPLIER.
+    # Defined here as a class constant so compliance.py stays self-contained
+    # (no import from context_rules which would introduce a dependency cycle
+    # via the TYPE_CHECKING guard in that module).
+    _HAZARD_PROXIMITY_MULTIPLIER: float = 1.5
+
+    @staticmethod
+    def _populate_nearby_hazards(
+        records: list[PersonRecord],
+        hazard_detections: list,   # list[HazardDetection] — typed as list to avoid import
+    ) -> None:
+        """Fill PersonRecord.nearby_hazards for each person in proximity to a machine.
+
+        For each (person, hazard) pair we expand the hazard's bounding box by
+        _HAZARD_PROXIMITY_MULTIPLIER around its center, then check whether the
+        person's center point falls inside that expanded zone.
+
+        This is intentionally a center-point test (not a full-box overlap) to
+        avoid false positives when a person's bounding box clips the far edge
+        of a machine that is several metres away.
+
+        Args:
+            records:           PersonRecord list built by _associate().
+            hazard_detections: List of HazardDetection objects from ContextDetector.
+                               Accessed via duck typing (.xyxy, .class_name, .cx, .cy).
+        """
+        mult = ComplianceChecker._HAZARD_PROXIMITY_MULTIPLIER
+
+        for hazard in hazard_detections:
+            hx1, hy1, hx2, hy2 = hazard.xyxy
+            hw = (hx2 - hx1) * mult
+            hh = (hy2 - hy1) * mult
+            hcx = (hx1 + hx2) / 2
+            hcy = (hy1 + hy2) / 2
+            zone = (hcx - hw / 2, hcy - hh / 2, hcx + hw / 2, hcy + hh / 2)
+
+            for rec in records:
+                pcx = rec.detection.cx
+                pcy = rec.detection.cy
+                if zone[0] <= pcx <= zone[2] and zone[1] <= pcy <= zone[3]:
+                    # Avoid duplicate entries if the same machine fires twice
+                    if hazard.class_name not in rec.nearby_hazards:
+                        rec.nearby_hazards.append(hazard.class_name)
 
     @staticmethod
     def _parse(boxes, class_names: dict[int, str]) -> list[Detection]:
