@@ -107,18 +107,21 @@ class ContextDetector:
     # per-frame use while YOLOv11m is also running in the same loop.
     _WEIGHTS = "yolov8s-worldv2.pt"
 
-    def __init__(self, conf_threshold: float = 0.20) -> None:
+    def __init__(self, conf_threshold: float = 0.20, device: str = "cpu") -> None:
         """Load YOLO-World and register the text prompt classes.
 
         Args:
             conf_threshold: Minimum detection confidence to report.
                             Set lower than the default (0.25) because
                             construction machinery is often partially occluded.
+            device:         Inference device passed to ultralytics predict()
+                            (e.g. "cpu", "0" for first GPU).  Should match
+                            the device used for the PPE model in detect.py.
         """
         # Deferred import: ultralytics is large and only needed in context mode.
         from ultralytics import YOLOWorld
 
-        print(f"[context_detector] Loading {self._WEIGHTS}…")
+        print(f"[context_detector] Loading {self._WEIGHTS}...")
         self._model = YOLOWorld(self._WEIGHTS)
 
         # This is the defining YOLO-World API call.
@@ -129,6 +132,7 @@ class ContextDetector:
         self._model.set_classes(HAZARD_CLASSES)
 
         self._conf = conf_threshold
+        self._device = device
         print(
             f"[context_detector] Ready — watching {len(HAZARD_CLASSES)} hazard classes: "
             f"{', '.join(HAZARD_CLASSES)}"
@@ -152,7 +156,7 @@ class ContextDetector:
             List of HazardDetection objects, one per detected machine.
             Empty list if no machinery is visible.
         """
-        results = self._model.predict(frame, conf=self._conf, verbose=False)
+        results = self._model.predict(frame, conf=self._conf, device=self._device, verbose=False)
         detections: list[HazardDetection] = []
 
         if not results or results[0].boxes is None:

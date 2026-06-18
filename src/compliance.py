@@ -50,14 +50,16 @@ class PersonRecord:
     hardhat_compliant: bool = False
     mask_compliant: bool = False
     vest_compliant: bool = False
-    hardhat_position_valid: bool = False
-    mask_position_valid: bool = False
-    vest_position_valid: bool = False
     fully_compliant: bool = False
     # Names of YOLO-World-detected machines whose danger zone overlaps this person.
     # Populated by ComplianceChecker.analyze() when hazard_detections are provided.
     # Used by context_rules.build_ppe_summary() and the visualizer proximity overlay.
     nearby_hazards: list[str] = field(default_factory=list)
+    # PPE items actually required for this person given their nearby hazards.
+    # None  → no context mode; _compute_compliance() will require all three.
+    # Empty frozenset → context mode, no nearby hazards; person is fully compliant.
+    # Non-empty frozenset → only these items are checked for full compliance.
+    required_ppe: Optional[frozenset] = None
 
 
 @dataclass
@@ -79,10 +81,6 @@ class ComplianceChecker:
     PERSON_CLASS = 5
     IGNORED_CLASSES = {6, 8, 9}  # cone, machinery, vehicle
 
-    HEAD_ZONE_FRACTION = 0.30   # top 30 % of person box = head
-    MASK_ZONE_FRACTION = 0.35   # top 35 % = face / mask region
-    TORSO_TOP_FRACTION = 0.15   # torso starts at 15 %
-    TORSO_BOT_FRACTION = 0.75   # torso ends at 75 %
     MIN_OVERLAP = 0.30          # minimum containment ratio to assign PPE to person
 
     def analyze(
@@ -119,14 +117,21 @@ class ComplianceChecker:
             return ComplianceReport(unassociated_ppe=ppe_items)
 
         records, unassociated = self._associate(persons_det, ppe_items)
+
+        # Hazard proximity must run BEFORE compliance so _compute_compliance()
+        # can use required_ppe derived from nearby machinery.
+        # None  → context mode off → keep required_ppe=None → require all three.
+        # []    → context mode on, no hazards detected → required_ppe=frozenset() → no PPE required.
+        # [...] → context mode on, hazards present → required_ppe derived from rules.
+        if hazard_detections is not None:
+            self._populate_nearby_hazards(records, hazard_detections)
+            # Lazy import: context_rules is only available when --context is active.
+            from context_rules import required_ppe_for_hazards
+            for rec in records:
+                rec.required_ppe = required_ppe_for_hazards(rec.nearby_hazards)
+
         for rec in records:
             self._compute_compliance(rec)
-
-        # Hazard proximity annotation — only runs when context mode is active.
-        # We keep this logic here so the rest of the pipeline only needs to
-        # read PersonRecord.nearby_hazards without knowing where it came from.
-        if hazard_detections:
-            self._populate_nearby_hazards(records, hazard_detections)
 
         compliant = sum(1 for r in records if r.fully_compliant)
         violations = len(records) - compliant
@@ -279,61 +284,38 @@ class ComplianceChecker:
             if rec.no_vest is None or det.conf > rec.no_vest.conf:
                 rec.no_vest = det
 
-    def _validate_position(
-        self,
-        ppe: Detection,
-        person: Detection,
-        role: str,
-    ) -> bool:
-        p_top = person.xyxy[1]
-        p_h = person.height
-        if p_h <= 0:
-            return True  # cannot validate, give benefit of the doubt
-        relative_y = (ppe.cy - p_top) / p_h
-        if role == "hardhat":
-            return relative_y <= self.HEAD_ZONE_FRACTION
-        if role == "mask":
-            return relative_y <= self.MASK_ZONE_FRACTION
-        if role == "vest":
-            return self.TORSO_TOP_FRACTION <= relative_y <= self.TORSO_BOT_FRACTION
-        return True
-
     def _compute_compliance(self, rec: PersonRecord) -> None:
-        person = rec.detection
+        # For each PPE item the logic is:
+        #   worn detected, no-worn absent  → compliant
+        #   no-worn detected, worn absent  → not compliant
+        #   both detected (model ambiguity) → trust higher confidence
+        #   neither detected               → not compliant (conservative)
+        #
+        # Position validation has been intentionally removed.  The model was
+        # fine-tuned specifically to distinguish "worn" from "not worn" — that
+        # classification is the right signal.  Any fixed-fraction zone check
+        # would be brittle: it depends on camera distance, pose, and crop,
+        # making it just as likely to produce false negatives as catch errors.
+        # The containment-ratio association (MIN_OVERLAP) already guarantees
+        # the PPE box belongs to this person.
 
         # Hardhat
         if rec.no_hardhat is not None and rec.hardhat is None:
             rec.hardhat_compliant = False
         elif rec.hardhat is not None and rec.no_hardhat is None:
-            valid = self._validate_position(rec.hardhat, person, "hardhat")
-            rec.hardhat_position_valid = valid
-            rec.hardhat_compliant = valid
+            rec.hardhat_compliant = True
         elif rec.hardhat is not None and rec.no_hardhat is not None:
-            # model ambiguity — trust higher confidence
-            if rec.hardhat.conf >= rec.no_hardhat.conf:
-                valid = self._validate_position(rec.hardhat, person, "hardhat")
-                rec.hardhat_position_valid = valid
-                rec.hardhat_compliant = valid
-            else:
-                rec.hardhat_compliant = False
+            rec.hardhat_compliant = rec.hardhat.conf >= rec.no_hardhat.conf
         else:
-            # neither detected — conservative: non-compliant
             rec.hardhat_compliant = False
 
         # Mask
         if rec.no_mask is not None and rec.mask is None:
             rec.mask_compliant = False
         elif rec.mask is not None and rec.no_mask is None:
-            valid = self._validate_position(rec.mask, person, "mask")
-            rec.mask_position_valid = valid
-            rec.mask_compliant = valid
+            rec.mask_compliant = True
         elif rec.mask is not None and rec.no_mask is not None:
-            if rec.mask.conf >= rec.no_mask.conf:
-                valid = self._validate_position(rec.mask, person, "mask")
-                rec.mask_position_valid = valid
-                rec.mask_compliant = valid
-            else:
-                rec.mask_compliant = False
+            rec.mask_compliant = rec.mask.conf >= rec.no_mask.conf
         else:
             rec.mask_compliant = False
 
@@ -341,19 +323,20 @@ class ComplianceChecker:
         if rec.no_vest is not None and rec.vest is None:
             rec.vest_compliant = False
         elif rec.vest is not None and rec.no_vest is None:
-            valid = self._validate_position(rec.vest, person, "vest")
-            rec.vest_position_valid = valid
-            rec.vest_compliant = valid
+            rec.vest_compliant = True
         elif rec.vest is not None and rec.no_vest is not None:
-            if rec.vest.conf >= rec.no_vest.conf:
-                valid = self._validate_position(rec.vest, person, "vest")
-                rec.vest_position_valid = valid
-                rec.vest_compliant = valid
-            else:
-                rec.vest_compliant = False
+            rec.vest_compliant = rec.vest.conf >= rec.no_vest.conf
         else:
             rec.vest_compliant = False
 
-        rec.fully_compliant = (
-            rec.hardhat_compliant and rec.mask_compliant and rec.vest_compliant
-        )
+        if rec.required_ppe is None:
+            # No context mode — conservative: all three required.
+            rec.fully_compliant = (
+                rec.hardhat_compliant and rec.mask_compliant and rec.vest_compliant
+            )
+        else:
+            # Context mode: only check the items required by nearby hazards.
+            # Empty frozenset (no nearby hazards) → all(...) = True → compliant.
+            rec.fully_compliant = all(
+                getattr(rec, f"{item}_compliant") for item in rec.required_ppe
+            )

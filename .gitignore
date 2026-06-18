@@ -6,16 +6,22 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Ultralytics training outputs (large — copy best.pt manually)
+# Ultralytics training outputs (large — only the final weights are tracked)
 runs/
+!runs/
+!runs/detect/
+runs/detect/*
+!runs/detect/runs/
+!runs/detect/runs/train/
+runs/detect/runs/train/*
+!runs/detect/runs/train/ppe_yolo11-2/
+runs/detect/runs/train/ppe_yolo11-2/*
+!runs/detect/runs/train/ppe_yolo11-2/weights/
+runs/detect/runs/train/ppe_yolo11-2/weights/*
+!runs/detect/runs/train/ppe_yolo11-2/weights/best.pt
 
 # ONNX exports
 *.onnx
-
-# Output videos
-output.mp4
-*.mp4
-!Date_pentru_testare/*.mp4
 
 # macOS
 .DS_Store

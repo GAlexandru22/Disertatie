@@ -62,13 +62,12 @@ class Visualizer:
         if hazard_detections:
             self._draw_hazard_zones(out, hazard_detections)
 
-        # Layers 2-4: existing PPE compliance drawing
-        self._draw_person_boxes(out, report.persons)
+        # Layers 2-4: PPE compliance drawing (person outer boxes intentionally omitted)
         self._draw_ppe_boxes(out, report.persons, report.unassociated_ppe)
         self._draw_compliance_badges(out, report.persons)
 
         # Layer 5: HUD (always on top of detections, behind VLM panel)
-        self._draw_hud(out, report, fps, source_label)
+        self._draw_hud(out, report, fps, source_label, vlm_state=vlm_state)
 
         # Layer 6: VLM result panel (drawn last — highest z-order)
         if vlm_state is not None:
@@ -216,11 +215,12 @@ class Visualizer:
         report: ComplianceReport,
         fps: float,
         source_label: str,
+        vlm_state=None,    # VLMState | None
     ) -> None:
         h, w = frame.shape[:2]
 
-        # Extra row in the HUD panel when context mode is on (for the V-key hint)
-        panel_h = 167 if self._context_mode else 145
+        # Two extra rows in the HUD panel when context mode is on (V and R hints)
+        panel_h = 189 if self._context_mode else 145
         panel_w = 230
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (panel_w, panel_h), _DARK, -1)
@@ -234,9 +234,10 @@ class Visualizer:
             (f"Violat.: {report.violation_count}", _RED if report.violation_count else _WHITE),
         ]
 
-        # When context mode is active, remind the user about the VLM shortcut
+        # When context mode is active, remind the user about the VLM shortcuts
         if self._context_mode:
             lines.append(("[V] Run VLM Analysis", _YELLOW))
+            lines.append(("[R] Reset VLM",        _GRAY))
 
         for i, (text, color) in enumerate(lines):
             cv2.putText(
@@ -245,9 +246,16 @@ class Visualizer:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 1, cv2.LINE_AA,
             )
 
-        # Large status banner bottom-right
-        status_text = "SAFE" if report.frame_compliant else "VIOLATION"
-        status_color = _GREEN if report.frame_compliant else _RED
+        # Large status banner bottom-right.
+        # When a VLM result is available it takes precedence over the YOLO
+        # checker — they analyse the same scene but the VLM has the final word
+        # on context-aware compliance.
+        if vlm_state is not None and vlm_state.result is not None:
+            compliant = vlm_state.result.compliant
+        else:
+            compliant = report.frame_compliant
+        status_text  = "SAFE"      if compliant else "VIOLATION"
+        status_color = _GREEN      if compliant else _RED
         font_scale = 1.4
         thickness = 3
         (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_DUPLEX, font_scale, thickness)

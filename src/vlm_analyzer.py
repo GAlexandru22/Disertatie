@@ -123,6 +123,9 @@ class VLMAnalyzer:
         self._lock = threading.Lock()
         # Prevents two overlapping queries from running simultaneously
         self._query_lock = threading.Lock()
+        # Incremented on each reset(); in-flight query threads compare their
+        # captured generation against this and discard results if it changed.
+        self._reset_generation: int = 0
 
         # Health-check runs in a background thread so video starts immediately
         threading.Thread(
@@ -155,23 +158,43 @@ class VLMAnalyzer:
     # Public action API
     # ------------------------------------------------------------------
 
+    def reset(self) -> None:
+        """Hard-reset VLM state: clear the last result and return to idle-ready.
+
+        Wipes the stored result so the overlay disappears.  If a query is
+        currently running it completes in the background and its result is
+        discarded (the _reset_generation counter makes the stale write a no-op).
+        """
+        with self._lock:
+            self._state.result = None
+            # Bump generation so any in-flight query thread knows its result
+            # is stale and should not be written back.
+            self._reset_generation += 1
+            gen = self._reset_generation
+        print(f"[vlm] Hard reset (gen={gen}) — overlay cleared, stale query results will be discarded.")
+
     def query_async(
         self,
         frame: np.ndarray,
         proximity_summary: str,
-        ppe_summary: str,
+        custom_context: str = "",
+        person_statuses: Optional[list] = None,
     ) -> None:
         """Fire a non-blocking VLM query in a background thread.
 
         If the model is not ready or a query is already running, the request
         is silently dropped — the user can press V again.
 
+        LLaVA receives both the hazard context and the YOLO per-worker detection
+        data (what each worker IS wearing), then determines requirements and
+        produces the final compliance verdict in one step.
+
         Args:
-            frame:             The current video frame (BGR, H×W×3).
-            proximity_summary: Hazard/person proximity string from ContextDetector,
-                               e.g. "1 person near bulldozer".
-            ppe_summary:       One-line PPE status from context_rules.build_ppe_summary(),
-                               e.g. "Person 1: hardhat=NO, mask=YES, vest=NO".
+            frame:             The current video frame or multi-frame composite (BGR).
+            proximity_summary: Hazard/person proximity string from ContextDetector.
+            custom_context:    Optional free-text note typed by the operator.
+            person_statuses:   List of dicts with per-worker YOLO detection results,
+                               e.g. [{"worker_num": 1, "hardhat": True, ...}, ...]
         """
         if not self.ready:
             print("[vlm] Not ready yet — try again shortly.")
@@ -183,10 +206,11 @@ class VLMAnalyzer:
 
         with self._lock:
             self._state.status = "analyzing"
+            generation = self._reset_generation   # snapshot before thread starts
 
         threading.Thread(
             target=self._run_query,
-            args=(frame.copy(), proximity_summary, ppe_summary),
+            args=(frame.copy(), proximity_summary, custom_context, person_statuses, generation),
             daemon=True,
             name="vlm-query",
         ).start()
@@ -257,55 +281,72 @@ class VLMAnalyzer:
         self,
         frame: np.ndarray,
         proximity_summary: str,
-        ppe_summary: str,
+        custom_context: str = "",
+        person_statuses: Optional[list] = None,
+        generation: int = 0,
     ) -> None:
-        """Send the frame + prompt to Ollama and store the result.  Runs in a thread.
+        """Send image + YOLO detections to LLaVA; it determines requirements AND compliance.
 
         Steps:
-          1. Encode the BGR frame as a JPEG and convert to base64.
-          2. Build the structured safety-inspection prompt.
-          3. POST to Ollama's /api/chat endpoint with the image + prompt.
-          4. Parse the JSON response into a VLMResult.
-          5. Update state so the visualizer picks it up on the next frame.
+          1. Short-circuit if nothing to reason about (no machinery, no operator note).
+          2. Build a prompt that includes both hazard context and per-worker YOLO data.
+          3. LLaVA determines what PPE is required and compares against what's worn.
+          4. Parse the final verdict (compliant, violations, summary) directly.
+          5. Discard result if reset() was called while the query was running.
         """
         result: VLMResult
         try:
             import requests
 
-            # Step 1: encode the frame as base64 JPEG.
-            # JPEG is compact — reduces the payload size vs PNG without
-            # meaningfully affecting the model's visual understanding.
-            image_b64 = _encode_frame_b64(frame)
+            print(f"[debug:vlm] person_statuses received: {person_statuses}")
+            print(f"[debug:vlm] custom_context: '{custom_context}'")
 
-            # Step 2: build the prompt
-            prompt = _build_prompt(proximity_summary, ppe_summary)
+            no_machinery = not proximity_summary or proximity_summary == "no heavy machinery detected"
 
-            # Step 3: call the Ollama chat endpoint.
-            # stream=False means we wait for the full response before returning.
-            payload = {
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                        "images": [image_b64],
-                    }
-                ],
-                "stream": False,
-            }
+            if no_machinery and not custom_context.strip():
+                print("[debug:vlm] Short-circuit: no hazards and no operator note — skipping VLM call")
+                result = VLMResult(
+                    compliant=True,
+                    violations=[],
+                    summary="No hazards detected near workers.",
+                )
+            else:
+                image_b64 = _encode_frame_b64(frame)
+                prompt = _build_prompt(proximity_summary, custom_context, person_statuses or [])
+                print(f"[debug:vlm] Prompt sent to LLaVA:\n{prompt}\n---")
 
-            resp = requests.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json=payload,
-                timeout=QUERY_TIMEOUT_SECONDS,
-            )
-            resp.raise_for_status()
+                payload = {
+                    "model": OLLAMA_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt,
+                            "images": [image_b64],
+                        }
+                    ],
+                    "stream": False,
+                }
 
-            raw_response = resp.json()["message"]["content"].strip()
-            print(f"[vlm] Raw response: {raw_response[:300]}")
+                resp = requests.post(
+                    f"{OLLAMA_BASE_URL}/api/chat",
+                    json=payload,
+                    timeout=QUERY_TIMEOUT_SECONDS,
+                )
+                resp.raise_for_status()
 
-            # Step 4: parse structured JSON from LLaVA's response
-            result = _parse_response(raw_response)
+                raw_response = resp.json()["message"]["content"].strip()
+                print(f"[vlm] Raw response: {raw_response[:300]}")
+
+                result = _parse_vlm_verdict(raw_response)
+                if result is None:
+                    print("[vlm] JSON parse failed — returning compliant with no violations")
+                    result = VLMResult(
+                        compliant=True,
+                        violations=[],
+                        summary="Could not parse VLM response.",
+                    )
+                else:
+                    print(f"[debug:vlm] Parsed verdict: compliant={result.compliant} violations={result.violations}")
 
         except Exception as exc:
             print(f"[vlm] Query error: {exc}")
@@ -318,6 +359,9 @@ class VLMAnalyzer:
             self._query_lock.release()
 
         with self._lock:
+            if self._reset_generation != generation:
+                print(f"[vlm] Query result discarded (reset occurred during analysis).")
+                return
             self._state.status = "done"
             self._state.result = result
             self._state.timestamp = time.time()
@@ -343,64 +387,91 @@ def _encode_frame_b64(frame: np.ndarray) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _build_prompt(proximity_summary: str, ppe_summary: str) -> str:
-    """Construct the structured safety-inspection prompt.
+def _build_prompt(
+    proximity_summary: str,
+    custom_context: str = "",
+    person_statuses: Optional[list] = None,
+) -> str:
+    """Guide LLaVA through two explicit reasoning steps.
 
-    We provide the YOLOv11m PPE sensor readings as additional context so
-    LLaVA focuses on reasoning about the environment rather than re-detecting
-    low-level PPE items from scratch.  The JSON output instruction is critical
-    for reliable parsing.
+    Step 1: identify hazards from the image → determine required PPE.
+    Step 2: compare required PPE against YOLO sensor readings → produce verdict.
     """
+    context_lines: list[str] = []
+    if proximity_summary and proximity_summary != "no heavy machinery detected":
+        context_lines.append(f"Proximity sensor: {proximity_summary}")
+    if custom_context.strip():
+        context_lines.append(f"Operator note: {custom_context}")
+    context_section = (
+        "\n".join(context_lines) if context_lines
+        else "No additional sensor data."
+    )
+
+    if person_statuses:
+        worker_lines: list[str] = []
+        for ps in person_statuses:
+            worn = [item for item in ("hardhat", "mask", "vest") if ps.get(item, False)]
+            not_worn = [item for item in ("hardhat", "mask", "vest") if not ps.get(item, False)]
+            nearby = f", near: {', '.join(ps['nearby_hazards'])}" if ps.get("nearby_hazards") else ""
+            worker_lines.append(
+                f"  Worker {ps['worker_num']}: "
+                f"WEARING [{', '.join(worn) if worn else 'none'}] "
+                f"NOT WEARING [{', '.join(not_worn) if not_worn else 'none'}]"
+                f"{nearby}"
+            )
+        workers_section = "\n".join(worker_lines)
+    else:
+        workers_section = "  No workers detected."
+
     return (
-        "You are a construction site safety inspector reviewing a live camera feed.\n\n"
-        "Scene information detected by sensors:\n"
-        f"  Machinery / hazards: {proximity_summary}\n"
-        f"  PPE sensor readings: {ppe_summary}\n\n"
-        "Task: Look at the image and assess whether all visible workers are wearing "
-        "the required personal protective equipment (PPE) for the hazards present. "
-        "Required PPE near heavy machinery (bulldozer, excavator, crane, etc.): "
-        "hardhat and safety vest at minimum.\n\n"
-        "Respond ONLY with a single valid JSON object — no extra text before or after:\n"
-        '{"compliant": true_or_false, '
-        '"violations": ["describe each violation briefly"], '
-        '"summary": "one sentence conclusion"}'
+        "You are a construction site safety inspector. Follow these two steps.\n\n"
+        "--- STEP 1: ASSESS THE SCENE ---\n"
+        "Look at the image. What hazards are present?\n"
+        "Then decide: for each hazard, which PPE item does it require?\n"
+        "  hardhat -> cranes, overhead work, falling objects, debris, excavators\n"
+        "  vest    -> moving vehicles, forklifts, bulldozers, heavy machinery\n"
+        "  mask    -> ONLY if you see dense dust clouds / smoke in the image,\n"
+        "             OR the operator note explicitly mentions dust/chemicals/fumes\n\n"
+        "Additional context from sensors:\n"
+        f"{context_section}\n\n"
+        "--- STEP 2: CHECK EACH WORKER ---\n"
+        "Using the required PPE you determined in Step 1, check the YOLO sensor\n"
+        "readings below. Trust the sensor for what each worker is wearing.\n\n"
+        "YOLO sensor readings:\n"
+        f"{workers_section}\n\n"
+        "For each worker: if they are NOT WEARING a required item -> violation.\n"
+        "If no hazards require PPE, all workers are compliant.\n\n"
+        "Respond ONLY with valid JSON — no other text:\n"
+        '{"hazards_seen": ["..."], "required_ppe": ["..."], '
+        '"compliant": true, "violations": ["Worker N missing: item (reason)"], '
+        '"summary": "one sentence"}'
     )
 
 
-def _parse_response(raw: str) -> VLMResult:
-    """Parse LLaVA's text output into a VLMResult.
+def _parse_vlm_verdict(raw: str) -> Optional[VLMResult]:
+    """Parse LLaVA's two-step compliance verdict from JSON.
 
-    Strategy:
-      1. Extract a balanced JSON object using bracket counting (handles nested lists).
-      2. If JSON parsing fails, fall back to keyword-based heuristics.
+    Expects: {"hazards_seen": [...], "required_ppe": [...],
+              "compliant": bool, "violations": [...], "summary": "..."}
+    Returns None if the response cannot be parsed.
     """
     json_str = _extract_balanced_json(raw)
-    if json_str:
-        try:
-            data = json.loads(json_str)
-            violations = data.get("violations", [])
-            if isinstance(violations, str):
-                violations = [violations] if violations else []
-            return VLMResult(
-                compliant=bool(data.get("compliant", False)),
-                violations=[str(v) for v in violations],
-                summary=str(data.get("summary", raw[:200])),
-            )
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-
-    # Heuristic fallback
-    lower = raw.lower()
-    positive = {"compliant", "all workers", "properly equipped", "wearing"}
-    negative = {"missing", "not wearing", "no hardhat", "violation", "non-compliant"}
-    is_compliant = (
-        any(w in lower for w in positive) and not any(w in lower for w in negative)
-    )
-    return VLMResult(
-        compliant=is_compliant,
-        violations=[] if is_compliant else ["See summary — JSON parsing failed."],
-        summary=raw[:300] if raw else "No response from model.",
-    )
+    if not json_str:
+        return None
+    try:
+        data = json.loads(json_str)
+        violations = [str(v) for v in data.get("violations", [])]
+        compliant = bool(data.get("compliant", len(violations) == 0))
+        if violations:
+            compliant = False
+        summary = str(data.get("summary", ""))
+        hazards = data.get("hazards_seen", [])
+        required = data.get("required_ppe", [])
+        if hazards or required:
+            print(f"[debug:vlm] Hazards seen: {hazards} -> Required PPE: {required}")
+        return VLMResult(compliant=compliant, violations=violations, summary=summary)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def _extract_balanced_json(text: str) -> Optional[str]:

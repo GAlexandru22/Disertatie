@@ -48,30 +48,38 @@ PROXIMITY_MULTIPLIER: float = 1.5
 # ---------------------------------------------------------------------------
 
 def build_ppe_summary(report: ComplianceReport) -> str:
-    """Convert a ComplianceReport into a one-line PPE status string.
+    """Convert a ComplianceReport into a natural-language PPE status string.
 
-    This string is inserted into the LLaVA prompt so the VLM receives the
-    output of our fast YOLOv11m detector as additional context, reducing
-    the burden on the VLM for low-level PPE detection.
+    Uses plain English ("has hardhat, missing vest") rather than key=value
+    pairs so the sentence integrates naturally into the LLaVA prompt and is
+    easier for the model to reason about.
 
     Example output:
-        "Person 1: hardhat=NO, mask=YES, vest=NO | Person 2: hardhat=YES, mask=YES, vest=YES"
-
-    If no persons were detected, returns a sentinel string so the VLM still
-    receives a meaningful (empty-scene) prompt.
+        Worker 1 (near crane): has mask | missing hardhat, vest
+        Worker 2: fully equipped (hardhat, mask, vest)
     """
     if not report.persons:
         return "No workers detected in frame."
 
     parts: list[str] = []
     for rec in report.persons:
-        h = "YES" if rec.hardhat_compliant else "NO"
-        m = "YES" if rec.mask_compliant    else "NO"
-        v = "YES" if rec.vest_compliant    else "NO"
-        nearby = f" [near: {', '.join(rec.nearby_hazards)}]" if rec.nearby_hazards else ""
-        parts.append(f"Person {rec.person_idx + 1}: hardhat={h}, mask={m}, vest={v}{nearby}")
+        worn    = [item for item, ok in (("hardhat", rec.hardhat_compliant),
+                                         ("mask",    rec.mask_compliant),
+                                         ("vest",    rec.vest_compliant)) if ok]
+        missing = [item for item, ok in (("hardhat", rec.hardhat_compliant),
+                                         ("mask",    rec.mask_compliant),
+                                         ("vest",    rec.vest_compliant)) if not ok]
+        nearby = f" (near: {', '.join(rec.nearby_hazards)})" if rec.nearby_hazards else ""
+        label  = f"Worker {rec.person_idx + 1}{nearby}"
 
-    return " | ".join(parts)
+        if not missing:
+            parts.append(f"{label}: fully equipped ({', '.join(worn)})")
+        elif not worn:
+            parts.append(f"{label}: no PPE detected")
+        else:
+            parts.append(f"{label}: has {', '.join(worn)} | missing {', '.join(missing)}")
+
+    return "\n  ".join(parts)
 
 
 def required_ppe_for_hazards(hazard_names: list[str]) -> frozenset[str]:
